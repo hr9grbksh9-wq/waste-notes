@@ -10,7 +10,7 @@ import {
 } from './rules.js';
 import { buildJobNote, renderNotePdf } from './notes.js';
 
-const APP_VERSION = '0.1.2';
+const APP_VERSION = '0.1.3';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -93,7 +93,7 @@ async function route() {
       if (sub === 'gate') return viewGate(job, parts[4]);
       if (sub === 'hazard') return viewHazard(job, query.get('item'));
       if (sub === 'finish') return viewFinish(job);
-      if (sub === 'note') return viewNote(job, decodeURIComponent(parts[4] || ''));
+      if (sub === 'note') return viewNote(job, decodeURIComponent(parts[4] || ''), query.get('just') === '1');
     }
     if (parts[0] === 'office') {
       if (parts[1] === 'new') return viewJobForm(null);
@@ -228,7 +228,15 @@ async function viewCrewJobs() {
     <textarea id="packLink" rows="3" placeholder="Paste the job link"></textarea>
     <button class="btn primary" id="addPack">Add job</button>
   </details>
+  ${await backupCard(jobs.length)}
   <p class="muted small">${esc(state.settings.company.legal_name)} · item list ${esc(state.settings.items_version || '')} · <a href="#/office/settings">Settings</a> · <a href="#/help">Help</a></p>`;
+  const unsent = unsentOffice(jobs);
+  if (unsent.length) {
+    const tabs = $('.tabs');
+    (tabs || view()).insertAdjacentHTML(tabs ? 'afterend' : 'afterbegin', `<div class="card danger-card"><h2>Office copy not sent</h2><p>These notes only exist on this phone until the office copy is sent.</p>
+      ${unsent.map(({ job: j, note: n }) => `<a class="btn" href="#/crew/job/${j.id}/note/${encodeURIComponent(n.number)}">${esc(n.number)}</a>`).join('')}</div>`);
+  }
+  bindBackup();
   $('#addPack').onclick = () => {
     const p = extractPack($('#packLink').value);
     if (!p) return toast('That does not look like a job link.', 'bad');
@@ -288,6 +296,7 @@ async function viewCrewJob(job) {
   <div class="card step">
     <h2>3. Finish and send the note</h2>
     ${(job.notes || []).map((n) => `<div class="note-row"><strong>${esc(n.number)}</strong> <span class="muted">${fmtTime(n.issued_at)} · sealed ${esc(shortPrint(n.fingerprint))}</span>
+      <div>${n.sent?.office ? `<span class="pill ok">Office copy ${esc(sentText(n.sent.office))}</span>` : '<span class="pill bad">Office copy not sent</span>'} ${n.sent?.client ? `<span class="pill ok">Client ${esc(sentText(n.sent.client))}</span>` : '<span class="pill">Client not sent</span>'}</div>
       <div class="btnrow"><button class="btn" data-share-client="${esc(n.number)}">Send to client</button><button class="btn" data-share-office="${esc(n.number)}">Send to office</button><a class="btn" href="#/crew/job/${job.id}/note/${encodeURIComponent(n.number)}">View</a></div></div>`).join('')}
     ${unnoted.length && !openLoad
       ? `<a class="btn primary big" href="#/crew/job/${job.id}/finish">Finish: make the note (${unnoted.length} load${unnoted.length > 1 ? 's' : ''})</a>`
@@ -714,15 +723,15 @@ async function viewFinish(job) {
     const pdf = renderNotePdf(note, state.settings);
     fresh.notes = [...(fresh.notes || []), { number: note.number, issued_at: note.issued_at, fingerprint: note.seal.fingerprint, load_refs: note.load_refs, record: note, pdf: new Blob([pdf], { type: 'application/pdf' }) }];
     await jobPut(fresh);
-    toast(`Note ${note.number} made and sealed.`, 'ok');
-    go(`#/crew/job/${job.id}`);
+    go(`#/crew/job/${job.id}/note/${encodeURIComponent(note.number)}?just=1`);
   };
 }
 
 // ---------------- Sharing ----------------
+// Returns 'shared' (handed to the phone's share sheet), 'cancelled', or 'downloaded' (saved instead).
 async function shareFiles(files, title, text, to) {
   if (navigator.canShare && navigator.canShare({ files })) {
-    try { await navigator.share({ files, title, text: `${text}${to ? `\n\nSend to: ${to}` : ''}` }); return true; } catch (err) { if (err.name === 'AbortError') return false; }
+    try { await navigator.share({ files, title, text: `${text}${to ? `\n\nSend to: ${to}` : ''}` }); return 'shared'; } catch (err) { if (err.name === 'AbortError') return 'cancelled'; }
   }
   for (const f of files) {
     const a = document.createElement('a');
@@ -733,7 +742,7 @@ async function shareFiles(files, title, text, to) {
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   }
   if (to) toast(`Saved. Send it to: ${to}`);
-  return false;
+  return 'downloaded';
 }
 
 async function noteFiles(job, number) {
@@ -746,13 +755,22 @@ async function noteFiles(job, number) {
 
 async function shareNote(job, number, who) {
   const { pdf, json } = await noteFiles(job, number);
+  let result;
   if (who === 'client') {
     const to = [...new Set([...(job.notes_to || []), job.signatory?.email].filter(Boolean))].join(', ');
-    await shareFiles([pdf], `Waste transfer note ${number}`, `Waste transfer note ${number} for job ${job.ref}.`, to);
+    result = await shareFiles([pdf], `Waste transfer note ${number}`, `Waste transfer note ${number} for job ${job.ref}.`, to);
   } else {
-    await shareFiles([pdf, json], `Waste transfer note ${number} (office copy)`, `Office copy of ${number}: PDF and sealed record.`, state.settings.company.waste_email);
+    result = await shareFiles([pdf, json], `Waste transfer note ${number} (office copy)`, `Office copy of ${number}: PDF and sealed record.`, state.settings.company.waste_email);
   }
+  if (result === 'cancelled') return result;
+  const fresh = await jobGet(job.id);
+  fresh.notes = (fresh.notes || []).map((n) => (n.number === number ? { ...n, sent: { ...(n.sent || {}), [who]: { at: nowIso(), via: result } } } : n));
+  await jobPut(fresh);
+  return result;
 }
+
+const sentText = (x) => (x ? `${x.via === 'downloaded' ? 'saved to phone' : 'sent'} ${fmtTime(x.at)}` : null);
+const unsentOffice = (jobs) => jobs.flatMap((j) => (j.notes || []).filter((n) => !n.sent?.office).map((n) => ({ job: j, note: n })));
 
 // ---------------- Note screen (crew and office) ----------------
 // Phones cannot show a PDF inside the app, so the note is shown as a page;
@@ -831,10 +849,11 @@ function noteHtml(n) {
   return `<article class="note-doc">${h}</article>`;
 }
 
-async function showNote(note, actions, back) {
+async function showNote(note, actions, back, banner = '') {
   view().innerHTML = `
   <div class="card no-print">
     <div class="row"><a class="btn small" href="${back}">← Back</a><span class="pill">${esc(note.number)}</span></div>
+    ${banner}
     <div class="btnrow">${actions.map((a) => `<button class="btn ${a.primary ? 'primary' : ''}" data-act="${a.id}">${esc(a.label)}</button>`).join('')}</div>
   </div>
   ${noteHtml(note)}`;
@@ -844,16 +863,26 @@ async function showNote(note, actions, back) {
   if (el) { el.className = v.ok ? 'ok-text' : 'check-item block'; el.textContent = v.ok ? 'Seal checks out: nothing in this note has changed since it was made.' : 'Seal broken: this record has been changed since it was made.'; }
 }
 
-async function viewNote(job, number) {
+async function viewNote(job, number, justMade = false) {
   const n = (job.notes || []).find((x) => x.number === number);
   if (!n) { toast('That note is not on this phone.', 'bad'); return go(`#/crew/job/${job.id}`); }
   const save = async () => { const { pdf } = await noteFiles(job, number); downloadBlob(pdf.name, pdf); toast('PDF saved to Downloads.', 'ok'); };
+  const send = async (who) => {
+    const r = await shareNote(job, number, who);
+    if (r !== 'cancelled') viewNote(await jobGet(job.id), number);
+  };
+  const office = sentText(n.sent?.office);
+  const client = sentText(n.sent?.client);
+  const banner = office
+    ? `<p class="ok-text">Office copy ${esc(office)}.${client ? ` Client copy ${esc(client)}.` : ' Client copy not sent yet.'}</p>`
+    : `<div class="check-item block">${justMade ? 'Note made and sealed. Now send the office copy: until you do, it only exists on this phone.' : 'Office copy not sent yet: this note only exists on this phone.'}</div>`;
   await showNote(n.record, [
-    { id: 'client', label: 'Send to client', primary: true, run: () => shareNote(job, number, 'client') },
-    { id: 'office', label: 'Send to office', run: () => shareNote(job, number, 'office') },
+    ...(office ? [] : [{ id: 'office', label: 'Send office copy now', primary: true, run: () => send('office') }]),
+    { id: 'client', label: 'Send to client', primary: !!office, run: () => send('client') },
+    ...(office ? [{ id: 'office', label: 'Send office copy again', run: () => send('office') }] : []),
     { id: 'save', label: 'Save PDF', run: save },
     { id: 'print', label: 'Print', run: () => window.print() },
-  ], `#/crew/job/${job.id}`);
+  ], `#/crew/job/${job.id}`, banner);
 }
 
 async function viewRegisterNote(key) {
@@ -1039,7 +1068,9 @@ async function viewOfficeJobs() {
     ${jobs.map((j) => `<tr><td><strong>${esc(j.ref)}</strong></td><td>${fmtDate(j.date)}</td><td>${esc(j.producer?.name || '')}</td><td>${esc(j.collection?.postcode || '')}</td>
       <td>${noted.has(j.id) ? '<span class="pill ok">Received</span>' : (j.date && j.date < new Date().toISOString().slice(0, 10) ? '<span class="pill bad">Missing</span>' : '<span class="pill">Not yet</span>')}</td>
       <td><a href="#/office/sent/${j.id}">Link</a> · <a href="#/office/edit/${j.id}">Edit</a></td></tr>`).join('')}
-  </tbody></table>` : '<div class="card"><p>No jobs yet.</p></div>'}`;
+  </tbody></table>` : '<div class="card"><p>No jobs yet.</p></div>'}
+  ${await backupCard(jobs.length)}`;
+  bindBackup();
 }
 
 // ---------------- Office: register ----------------
@@ -1146,6 +1177,7 @@ async function viewSettings() {
     <div class="kv"><span>Item list</span><span>${s.items.length} items · version ${esc(s.items_version || '')}</span></div>
     <div class="kv"><span>Tip sites</span><span>${(s.sites || []).length} (${(s.sites || []).filter((x) => !x.permit_number).length} without a permit number)</span></div>
     <div class="kv"><span>This device</span><span>${state.mode === 'office' ? 'Office' : "Crew lead's phone"} · <button class="link" id="switch">switch</button></span></div>
+    <div class="kv"><span>Storage</span><span>${(await navigator.storage?.persisted?.()) ? 'Protected: the browser will not clear it to save space' : 'Not protected: install the app to the home screen to protect it'}</span></div>
   </div>
   <div class="card"><h2>Set up a crew phone</h2>
     <p>Send this link to each crew lead once, and again whenever the item list changes.</p>
@@ -1156,12 +1188,14 @@ async function viewSettings() {
     <input type="file" id="newSettings" accept="application/json,.json">
     <button class="btn" id="dl">Download current settings</button>
   </div>
+  ${await backupCard((await jobAll()).length)}
   <div class="card"><h2>Tip sites</h2>
     <table class="list"><thead><tr><th>Site</th><th>Postcode</th><th>Permit</th><th>Takes</th></tr></thead><tbody>
     ${(s.sites || []).map((x) => `<tr><td>${esc(x.name)}</td><td>${esc(x.postcode || '')}</td><td>${x.permit_number ? esc(x.permit_number) : '<span class="pill bad">missing</span>'}</td><td class="small">${esc((x.accepts || []).join(', '))}</td></tr>`).join('')}
     </tbody></table>
   </div>
   <p class="muted small">Waste Notes ${APP_VERSION}</p>`;
+  bindBackup();
   $('#switch').onclick = async () => { state.mode = state.mode === 'office' ? 'crew' : 'office'; await kvSet('mode', state.mode); go(state.mode === 'office' ? '#/office' : '#/crew'); };
   $('#mkLink').onclick = async () => {
     const link = `${location.origin}${location.pathname}#setup=${await encodePack({ kind: 'setup', settings: s })}`;
@@ -1187,6 +1221,66 @@ function viewHelp() {
     <p class="muted small">Quantities on notes are item counts; weights are estimates from the item list. Sealing uses SHA-256: if anything in a record changes after it is made, the register shows the seal as broken.</p>
     <a class="btn" href="#/">Back</a>
   </div>`;
+}
+
+// ---------------- Backup and restore ----------------
+// One file with every job, note record and register entry on this device.
+// PDFs are left out: they are remade exactly from the sealed records.
+async function backupCard(jobCount) {
+  const last = await kvGet('last_backup');
+  const ageDays = last ? (Date.now() - Date.parse(last.at)) / 86400000 : Infinity;
+  const stale = jobCount > 0 && ageDays > 3;
+  const where = state.mode === 'office' ? 'computer' : 'phone';
+  return `<div class="card ${stale ? 'warn-card' : ''}"><h2>Back up this ${where}</h2>
+    <p class="muted small">${last ? `Last backup ${fmtTime(last.at)} (${last.jobs} job${last.jobs === 1 ? '' : 's'}, ${last.via === 'downloaded' ? 'saved to this device' : 'sent'}).` : 'Never backed up.'}
+    ${stale ? ` Jobs and notes live only on this ${where} until they are sent or backed up.` : ''}</p>
+    <button class="btn ${stale ? 'primary' : ''}" data-backup>Back up now</button>
+    <details><summary>Restore from a backup</summary><input type="file" accept="application/json,.json" data-restore>
+      <p class="muted small">Adds anything missing and keeps whichever copy of a job is newer. Nothing is deleted.</p></details></div>`;
+}
+
+function bindBackup() {
+  $$('[data-backup]').forEach((b) => (b.onclick = makeBackup));
+  $$('[data-restore]').forEach((i) => (i.onchange = async (e) => { const f = e.target.files[0]; if (f) await restoreBackup(f); }));
+}
+
+async function makeBackup() {
+  const jobs = (await jobAll()).map(({ notes, ...j }) => ({ ...j, notes: (notes || []).map(({ pdf, ...n }) => n) }));
+  const register = await regAll();
+  const backup = await sealRecord({
+    kind: 'waste-notes-backup', schema: 1, made_at: nowIso(), app_version: APP_VERSION, device: state.mode || 'crew',
+    company: state.settings?.company?.legal_name || null, items_version: state.settings?.items_version || null, jobs, register,
+  });
+  const d = new Date();
+  const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
+  const file = new File([JSON.stringify(backup)], `waste-notes-backup-${stamp}.json`, { type: 'application/json' });
+  const res = await shareFiles([file], 'Waste Notes backup', `Backup of ${jobs.length} job(s) and ${register.length} register record(s), made ${fmtTime(backup.made_at)}.`, state.settings?.company?.waste_email);
+  if (res === 'cancelled') return;
+  await kvSet('last_backup', { at: backup.made_at, via: res, jobs: jobs.length });
+  toast(res === 'downloaded' ? 'Backup saved to this device.' : 'Backup sent.', 'ok');
+  route();
+}
+
+async function restoreBackup(file) {
+  let b;
+  try { b = JSON.parse(await file.text()); } catch { return toast('That file is not a backup.', 'bad'); }
+  if (b?.kind !== 'waste-notes-backup') return toast('That file is not a Waste Notes backup.', 'bad');
+  const v = await verifySeal(b);
+  if (!v.ok && !confirm('This backup has been changed since it was made. Restore it anyway?')) return;
+  let added = 0, updated = 0, kept = 0;
+  for (const j of b.jobs || []) {
+    const cur = await jobGet(j.id);
+    if (!cur) { await jobPut(j); added++; }
+    else if (String(j.updated_at || '') > String(cur.updated_at || '')) {
+      // Keep any note PDFs this device already holds.
+      const pdfs = new Map((cur.notes || []).filter((n) => n.pdf).map((n) => [n.number, n.pdf]));
+      await jobPut({ ...j, notes: (j.notes || []).map((n) => (pdfs.has(n.number) ? { ...n, pdf: pdfs.get(n.number) } : n)) });
+      updated++;
+    } else kept++;
+  }
+  for (const r of b.register || []) await regPut(r);
+  toast(`Restored: ${added} new, ${updated} updated, ${kept} already up to date${(b.register || []).length ? `, ${b.register.length} register records` : ''}.`, 'ok');
+  route();
 }
 
 // ---------------- Utilities ----------------

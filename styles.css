@@ -187,3 +187,4 @@ details summary { cursor: pointer; font-weight: 700; min-height: 40px; display: 
   .doc-h, .doc-sec, tr.pops td { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .doc-load, .sigs { break-inside: avoid; }
 }
+.warn-card { border: 2px solid var(--warn); background: #fdf6e6; }

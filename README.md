@@ -18,6 +18,10 @@ Waste transfer notes made from a count of what goes on the van. Built for remova
 
 Householders clearing their own home get a receipt instead of a transfer note. Scottish jobs follow the Scottish rules: no hierarchy declaration, and the client signs every load.
 
+## Where the data lives
+
+Everything stays on the device that made it, in the browser's storage for this app: jobs, counts, signatures, photos and sealed notes. The app asks the browser to protect that storage, and installing the app to the home screen helps. After a note is made, the app asks for the office copy (PDF plus sealed record) to be sent straight away, and it flags any note whose office copy has not gone. **Back up now** saves or sends one sealed file holding every job and record on the device. **Restore** adds anything missing, keeps the newer copy of a job, and never deletes anything.
+
 ## Privacy
 
 - Job details travel inside the job link's `#` fragment, so the web server never sees them.
