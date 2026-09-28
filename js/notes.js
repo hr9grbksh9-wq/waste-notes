@@ -61,7 +61,7 @@ export async function buildJobNote(job, settings) {
     },
     waste: streamTotals(allLines),
     declarations: {
-      hierarchy: regimeFor(job.nation) === 'EW' ? !!job.signoff?.hierarchy : null,
+      hierarchy: regimeFor(job.nation) === 'EW' && type?.needsNote !== false ? !!job.signoff?.hierarchy : null,
       description_accurate: !!job.signoff?.accurate,
     },
     signoff: job.signoff || null,

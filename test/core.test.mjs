@@ -85,6 +85,7 @@ writeFileSync(new URL('./out/sample-note.json', import.meta.url), JSON.stringify
 const hh = await buildJobNote({ ...job, transferor_type: 'householder', premises: 'domestic', notes: [] }, settings);
 writeFileSync(new URL('./out/sample-household.pdf', import.meta.url), renderNotePdf(hh, settings));
 ok(hh.kind === 'household_receipt', 'householder gets a receipt');
+ok(hh.declarations.hierarchy === null, 'householder is not asked for the hierarchy declaration (a business duty)');
 
 // scotland
 const sc = await buildJobNote({ ...job, nation: 'scotland' }, settings);
@@ -100,6 +101,24 @@ ok(sc.regime === 'SC' && sc.declarations.hierarchy === null, 'Scotland drops hie
   const hjob = { ...job, transferor_type: 'landlord_agent_executor', premises: 'domestic' };
   const hl = loadLines({ counts: { D04: 2 } }, itemById(s2), 'domestic');
   ok(loadChecks(hjob, { ...job.loads[0], counts: { D04: 2 } }, s2, hl).some((c) => c.rule === 'hazardous'), 'hazardous line blocks the load');
+}
+
+// Zoho import files: Zoho's field labels, one row per note and per item line, UK times
+{
+  const { zohoImportFiles, noteRow, lineRows, ukTime } = await import('../js/zoho.js');
+  const entry = { record: note, seal_ok: true, imported_at: '2026-09-29T12:00:00Z' };
+  const files = zohoImportFiles([entry]);
+  ok(files.notes.split('\n')[0].startsWith('Waste Transfer Note Name,Job Ref,') && files.notes.split('\n').length === 2, 'zoho notes file: Zoho labels, one row per note');
+  ok(!files.notes.split('\n')[0].includes('Tip Weight Kg'), 'zoho notes file leaves out columns empty in every row (no tip weights yet)');
+  const nLines = note.transfer.loads.reduce((a, l) => a + l.lines.length, 0);
+  ok(files.lines.split('\n').length === nLines + 1 && lineRows(entry)[0]['Waste Transfer Note'] === note.number, `zoho lines file: one row per item line (${nLines}), linked by note number`);
+  const row = noteRow(entry);
+  ok(row['First Load At'] === '2026-09-29 10:40:00' && ukTime('2026-12-01T09:00:00Z') === '2026-12-01 09:00:00', 'zoho times are UK time (BST and GMT)');
+  ok(row['Loads'] === 2 && row['Reuse Items'] === 4 && row['Seal Check'] === 'Checked OK' && row['Office Copy Received'] === '2026-09-29 13:00:00', 'zoho note row: loads, reuse, seal, office copy time');
+  const add = noteRow({ record: { ...note, addenda: [{ signed_at: '2026-09-29T09:00:00Z', client_name: 'Pat Client', streams: [{ code: '20 01 40', description: 'Metals' }] }] }, seal_ok: false });
+  ok(add['Additions'] === 1 && add['Additions Detail'] === '2026-09-29 10:00:00 Pat Client: 20 01 40 Metals' && add['Seal Check'] === 'Broken', 'zoho note row: signed additions and a broken seal');
+  const scl = lineRows({ record: { ...note, transfer: { ...note.transfer, loads: [{ ...note.transfer.loads[0], client_signature: { name: 'Pat Client', at: '2026-09-29T09:35:00Z' } }] } } })[0];
+  ok(scl['Load Signed By'] === 'Pat Client' && scl['Load Signed At'] === '2026-09-29 10:35:00', 'zoho line row: per-load client signature (Scotland)');
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nall passed');

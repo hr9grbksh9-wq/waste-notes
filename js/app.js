@@ -9,8 +9,9 @@ import {
   vehicleCapacity, signedStreamKeys, honestyFlags, codeFor, descriptionFor, quantityText, hazardousFor, availableFor, streamKey, lineQuantity,
 } from './rules.js';
 import { buildJobNote, renderNotePdf } from './notes.js';
+import { zohoImportFiles } from './zoho.js';
 
-const APP_VERSION = '0.1.3';
+const APP_VERSION = '0.1.4';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -332,6 +333,8 @@ function streamsForJob(job) {
 
 async function viewSignoff(job, addendum) {
   const regime = regimeFor(job.nation);
+  // Regulation 12 (waste hierarchy) is a business duty: householders are not asked.
+  const askHierarchy = regime === 'EW' && TRANSFEROR_TYPES[job.transferor_type]?.needsNote !== false;
   let streams;
   if (addendum) {
     const signed = new Set(signedStreamKeys(job));
@@ -358,7 +361,7 @@ async function viewSignoff(job, addendum) {
     <div class="kv"><span>Taken by</span><span>${esc(state.settings.company.legal_name)} · ${esc(state.settings.company.registration?.authority || '')} ${esc(state.settings.company.registration?.number || '')}</span></div>
   </div>
   <div class="card">
-    ${regime === 'EW' ? `<label class="check"><input type="checkbox" id="hier"> I confirm we have applied the waste hierarchy (reduce, reuse, recycle before disposal), as required by regulation 12 of the Waste (England and Wales) Regulations 2011.</label>` : ''}
+    ${askHierarchy ? `<label class="check"><input type="checkbox" id="hier"> I confirm we have applied the waste hierarchy (reduce, reuse, recycle before disposal), as required by regulation 12 of the Waste (England and Wales) Regulations 2011.</label>` : ''}
     <label class="check"><input type="checkbox" id="acc"> I confirm this describes the waste being handed over${addendum ? '' : ' today, and that each load will be recorded against this note'}.</label>
     <label>Client's name<input id="cname" value="${esc(job.signatory?.name || '')}" autocomplete="off"></label>
     <label>Their role<input id="crole" value="${esc(job.signatory?.role || '')}" autocomplete="off"></label>
@@ -377,7 +380,7 @@ async function viewSignoff(job, addendum) {
   $('#cclear').onclick = () => cpad.clear();
   $('#kclear').onclick = () => kpad.clear();
   $('#seal').onclick = async () => {
-    if (regime === 'EW' && !$('#hier').checked) return toast('The client needs to tick the waste hierarchy box.', 'bad');
+    if (askHierarchy && !$('#hier').checked) return toast('The client needs to tick the waste hierarchy box.', 'bad');
     if (!$('#acc').checked) return toast('The client needs to confirm the description.', 'bad');
     if (!$('#cname').value.trim() || cpad.isEmpty) return toast("Client's name and signature are needed.", 'bad');
     if (!$('#kname').value.trim() || kpad.isEmpty) return toast("Crew lead's name and signature are needed.", 'bad');
@@ -388,7 +391,7 @@ async function viewSignoff(job, addendum) {
     const record = await sealRecord({
       kind: addendum ? 'addendum' : 'signoff', job_id: job.id, job_ref: job.ref,
       streams: streams.map(({ key, code, description, pops, pops_chemicals }) => ({ key, code, description, pops, pops_chemicals: pops_chemicals || null })),
-      hierarchy: regime === 'EW' ? $('#hier').checked : null, accurate: $('#acc').checked,
+      hierarchy: askHierarchy ? $('#hier').checked : null, accurate: $('#acc').checked,
       client_name: $('#cname').value.trim(), client_role: $('#crole').value.trim(), client_signature: cpad.toJpeg(),
       crew_name: $('#kname').value.trim(), crew_signature: kpad.toJpeg(),
       signed_at: nowIso(), gps, place: job.collection || null, item_list_version: state.settings.items_version || null,
@@ -1084,7 +1087,7 @@ async function viewRegister(openKey) {
   <div class="card">
     <p>Add the sealed records (.json) that crews send to the waste inbox. Each one is checked against its seal.</p>
     <input type="file" id="imp" accept="application/json,.json" multiple>
-    <div class="btnrow"><button class="btn" id="csv">Download register (CSV)</button><button class="btn" id="pack">Duty-of-care pack for a client…</button></div>
+    <div class="btnrow"><button class="btn" id="csv">Download register (CSV)</button><button class="btn" id="zoho">Download for Zoho (2 files)</button><button class="btn" id="pack">Duty-of-care pack for a client…</button></div>
   </div>
   ${notes.length ? `<table class="list"><thead><tr><th>Note</th><th>Date</th><th>Producer</th><th class="r">Loads</th><th class="r">Items</th><th class="r">Est. kg</th><th class="r">Tip kg</th><th>Seal</th><th>Flags</th></tr></thead><tbody>
     ${notes.map((e) => {
@@ -1118,6 +1121,14 @@ async function viewRegister(openKey) {
     viewRegister();
   };
   $('#csv').onclick = () => downloadText(`waste-register-${new Date().toISOString().slice(0, 10)}.csv`, registerCsv(notes, tipByLoad), 'text/csv');
+  $('#zoho').onclick = () => {
+    if (!notes.length) return toast('No notes in the register yet.', 'bad');
+    const files = zohoImportFiles(notes, tipByLoad);
+    const day = new Date().toISOString().slice(0, 10);
+    downloadText(`zoho-notes-${day}.csv`, files.notes, 'text/csv');
+    setTimeout(() => downloadText(`zoho-lines-${day}.csv`, files.lines, 'text/csv'), 500);
+    toast('Two files downloaded. In Zoho, import the notes file first, then the lines file.', 'ok');
+  };
   $('#pack').onclick = () => {
     const who = prompt('Producer name (or part of it) for the pack:');
     if (!who) return;
