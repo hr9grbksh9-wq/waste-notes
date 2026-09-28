@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "name": "Example settings (fictional company, for trying the app)",
+  "company": {
+    "legal_name": "Example Removals Limited",
+    "trading_name": "Example Removals",
+    "address": "Unit 1, Example Park, Exampletown",
+    "postcode": "EX1 1AA",
+    "phone": "01000 000000",
+    "waste_email": "waste@example.com",
+    "sic": "49420",
+    "registration": {
+      "authority": "Environment Agency",
+      "number": "CBDU000000",
+      "tier": "Upper tier",
+      "roles": ["carrier", "broker", "dealer"],
+      "expiry": "2029-01-01"
+    },
+    "brand": { "primary": "#33403F", "accent": "#C9A227" }
+  },
+  "depots": [
+    { "id": "EXT", "name": "Exampletown", "postcode": "EX1 1AA", "ref_prefix": "EXT" }
+  ],
+  "vehicle_types": [
+    { "id": "18T", "label": "Large lorry", "usable_cuft": 1000 },
+    { "id": "7.5T", "label": "7.5 tonne", "usable_cuft": 800 },
+    { "id": "LUTON", "label": "Luton van", "usable_cuft": 400 }
+  ],
+  "sites": [
+    { "id": "site-general", "name": "Example Transfer Station", "operator": "Example Waste Ltd", "address": "Yard Road, Exampletown", "postcode": "EX2 2BB", "nation": "england", "permit_number": "EPR/EX0000XX (example)", "accepts": ["general_transfer", "metal", "wood", "paper", "packaging", "mattress"], "register_checked": "" },
+    { "id": "site-pops", "name": "Example Energy Recovery", "operator": "Example Energy Ltd", "address": "Furnace Lane, Exampletown", "postcode": "EX3 3CC", "nation": "england", "permit_number": "EPR/EX1111XX (example)", "accepts": ["pops_incineration", "general_transfer"], "register_checked": "" },
+    { "id": "site-weee", "name": "Example Electricals Recycling (AATF)", "operator": "Example Recycling Ltd", "address": "Circuit Way, Exampletown", "postcode": "EX4 4DD", "nation": "england", "permit_number": "", "accepts": ["aatf"], "register_checked": "" }
+  ],
+  "items_version": "example-1",
+  "items": [
+    { "id": "A01", "label": "Desk", "long_name": "Office desk, wood top, metal frame", "section": "general", "count_unit": "each", "std_kg": 26, "cu_ft": 19, "code_business": "20 03 07", "code_household": "20 03 07", "note_description_business": "Office furniture (bulky waste)", "note_description_household": "Household furniture (bulky waste)", "hazardous": false, "pops": false, "weee": false, "destination_type": "general_transfer", "crew_instruction": "", "common": true },
+    { "id": "A04", "label": "Filing cabinet, 4-drawer", "long_name": "Steel filing cabinet, 4-drawer, empty", "section": "wood_metal", "count_unit": "each", "std_kg": 45, "cu_ft": 14, "code_business": "20 01 40", "code_household": "20 01 40", "note_description_business": "Metals", "note_description_household": "Metals", "hazardous": false, "pops": false, "weee": false, "destination_type": "metal", "crew_instruction": "Must be empty.", "common": true },
+    { "id": "C01", "label": "Archive box of paper", "long_name": "Archive box full of paper (not confidential)", "section": "paper_packaging", "count_unit": "each", "std_kg": 14, "cu_ft": 1.2, "code_business": "20 01 01", "code_household": "20 01 01", "note_description_business": "Paper and cardboard", "note_description_household": "Paper and cardboard", "hazardous": false, "pops": false, "weee": false, "destination_type": "paper", "crew_instruction": "", "common": true },
+    { "id": "B01", "label": "Office chair (padded)", "long_name": "Task chair, upholstered or padded", "section": "seating_pops", "count_unit": "each", "std_kg": 12, "cu_ft": 8, "code_business": "20 03 07", "code_household": "20 03 07", "note_description_business": "domestic seating waste containing POPs", "note_description_household": "domestic seating waste containing POPs", "hazardous": false, "pops": true, "pops_chemicals": "DecaBDE, HBCDD, PentaBDE, TetraBDE", "weee": false, "destination_type": "pops_incineration", "crew_instruction": "Keep unmixed on the van. Unload separately.", "common": true },
+    { "id": "B04b", "label": "Sofa, 3-seat", "long_name": "Sofa, 3-seat, upholstered", "section": "seating_pops", "count_unit": "each", "std_kg": 42, "cu_ft": 54, "code_business": "20 03 07", "code_household": "20 03 07", "note_description_business": "domestic seating waste containing POPs", "note_description_household": "domestic seating waste containing POPs", "hazardous": false, "pops": true, "pops_chemicals": "DecaBDE, HBCDD, PentaBDE, TetraBDE", "weee": false, "destination_type": "pops_incineration", "crew_instruction": "Keep unmixed on the van. Unload separately.", "common": false },
+    { "id": "C08", "label": "Mixed bulky (per cu ft)", "long_name": "General mixed bulky waste left after reuse and recycling", "section": "general", "count_unit": "cu ft", "std_kg": 3, "cu_ft": 1, "code_business": "20 03 07", "code_household": "20 03 07", "note_description_business": "Mixed bulky waste (no seating, electricals or hazardous items)", "note_description_household": "Mixed bulky waste (no seating, electricals or hazardous items)", "hazardous": false, "pops": false, "weee": false, "destination_type": "general_transfer", "crew_instruction": "Nothing padded, electrical or hazardous in here.", "common": true },
+    { "id": "D04", "label": "Desktop PC", "long_name": "Desktop PC, tower or small form factor", "section": "electricals", "count_unit": "each", "std_kg": 7, "cu_ft": 1, "code_business": "16 02 14", "code_household": "20 01 36", "note_description_business": "Discarded electrical equipment (non-hazardous)", "note_description_household": "Discarded electrical equipment (non-hazardous)", "hazardous": false, "pops": false, "weee": true, "destination_type": "aatf", "crew_instruction": "Data-bearing: keep with the IT paperwork.", "common": true },
+    { "id": "D01", "label": "Monitor / flat screen", "long_name": "Flat-panel monitor up to about 24 in", "section": "hazardous_stop", "count_unit": "each", "std_kg": 7, "cu_ft": 1.5, "code_business": "16 02 13*", "code_household": "20 01 35*", "note_description_business": "Discarded equipment containing hazardous components (display)", "note_description_household": "Discarded equipment containing hazardous components (display)", "hazardous": true, "hazardous_trigger": "Hazardous waste consignment note", "pops": true, "weee": true, "destination_type": "aatf", "crew_instruction": "Do not load. Leave, isolate, photograph, tag, tell the ops manager.", "common": true },
+    { "id": "D18", "label": "Fluorescent tubes", "long_name": "Fluorescent tube or compact fluorescent lamp", "section": "hazardous_stop", "count_unit": "each", "std_kg": 0.25, "cu_ft": 0.05, "code_business": "20 01 21*", "code_household": "20 01 21*", "note_description_business": "Fluorescent tubes", "note_description_household": "Fluorescent tubes", "hazardous": true, "pops": false, "weee": true, "destination_type": "lamp", "crew_instruction": "Do not load. Leave, isolate, photograph, tag, tell the ops manager.", "common": false },
+    { "id": "E01b", "label": "Mattress, double", "long_name": "Mattress, double", "section": "domestic", "count_unit": "each", "std_kg": 40, "cu_ft": 23, "code_business": "20 03 07", "code_household": "20 03 07", "note_description_business": "Mattresses (bulky waste)", "note_description_household": "Mattresses (bulky waste)", "hazardous": false, "pops": false, "weee": false, "destination_type": "mattress", "crew_instruction": "", "common": false }
+  ]
+}
