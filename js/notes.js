@@ -1,13 +1,11 @@
 // Builds the sealed note record for a job, and renders it to PDF.
 import { PdfDoc, Flow, A4, hexToRgb, textWidth } from './pdf.js';
 import { sealRecord, shortPrint } from './seal.js';
-import { TRANSFEROR_TYPES, NATION_LABEL, premisesOf, itemById, loadLines, lineTotals, streamTotals, regimeFor, quantityText } from './rules.js';
+import { TRANSFEROR_TYPES, NATION_LABEL, premisesOf, itemById, loadLines, lineTotals, streamTotals, regimeFor, quantityText, lineQuantity } from './rules.js';
 
 const fmtTime = (iso) => (iso ? new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
 const fmtKg = (v, unknown) => (v == null ? 'n/k' : `${v.toLocaleString('en-GB')}${unknown ? '+' : ''}`);
 const addr = (a) => [a?.address, a?.postcode].filter(Boolean).join(', ');
-const PLURAL = { position: 'positions', column: 'columns', bag: 'bags', sack: 'sacks', bin: 'bins' };
-const qty = (x) => (!x.count_unit || x.count_unit === 'each' ? String(x.count) : `${x.count} ${x.count !== 1 && PLURAL[x.count_unit] ? PLURAL[x.count_unit] : x.count_unit}`);
 
 export function noteNumber(job) {
   const seq = (job.notes || []).length + 1;
@@ -57,7 +55,8 @@ export async function buildJobNote(job, settings) {
       company_number: job.producer?.company_number || null, fm_name: job.fm?.name || null,
     },
     transferee: {
-      legal_name: company.legal_name, trading_name: company.trading_name || null, address: company.address, postcode: company.postcode,
+      legal_name: company.legal_name, trading_name: company.trading_name || null, display_name: company.display_name || null,
+      address: company.address, postcode: company.postcode,
       registration: company.registration || {}, sic: company.sic || null,
     },
     waste: streamTotals(allLines),
@@ -92,7 +91,7 @@ export function renderNotePdf(note, settings) {
   const header = () => {
     doc.rect(0, 0, A4.w, 64, { fill: ink });
     doc.rect(0, 64, A4.w, 3, { fill: gold });
-    doc.text(40, 30, (settings?.company?.display_name || note.transferee?.trading_name || note.transferee?.legal_name || '').toUpperCase(), { size: 9, bold: true, color: gold });
+    doc.text(40, 30, (note.transferee?.display_name || note.transferee?.trading_name || note.transferee?.legal_name || '').toUpperCase(), { size: 9, bold: true, color: gold });
     doc.text(40, 50, title.toUpperCase(), { size: 16, bold: true, color: [1, 1, 1] });
     const right = `No. ${note.number}`;
     doc.text(A4.w - 40 - textWidth(right, 11, true), 30, right, { size: 11, bold: true, color: [1, 1, 1] });
@@ -193,7 +192,7 @@ export function renderNotePdf(note, settings) {
     flow.para(`Going to: ${dest || 'not recorded'}${l.destination?.permit_number ? ` · permit ${l.destination.permit_number}` : ''}`, { size: 8.5, gap: 5 });
     flow.table(
       [{ title: 'Item', width: 0.44 }, { title: 'Code', width: 0.14 }, { title: 'Quantity', width: 0.12, align: 'right' }, { title: 'Est. kg', width: 0.14, align: 'right' }, { title: 'cu ft', width: 0.16, align: 'right' }],
-      l.lines.map((x) => [x.label, x.code, qty(x), fmtKg(x.kg_est), x.cu_ft == null ? '' : String(x.cu_ft)]),
+      l.lines.map((x) => [x.label, x.code, lineQuantity(x), fmtKg(x.kg_est), x.cu_ft == null ? '' : String(x.cu_ft)]),
       { size: 8 },
     );
     const c = [...new Set(Object.values(l.containers || {}).map((v) => v.label || v))].join(', ');

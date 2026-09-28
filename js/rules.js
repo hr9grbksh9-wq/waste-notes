@@ -180,6 +180,13 @@ export function streamTotals(lines) {
   return [...map.values()];
 }
 
+// How one line's quantity reads: "12", "24 positions", "30 cu ft".
+const PLURAL = { position: 'positions', column: 'columns', bag: 'bags', sack: 'sacks', bin: 'bins' };
+export function lineQuantity(x) {
+  if (!x.count_unit || x.count_unit === 'each') return String(x.count);
+  return `${x.count} ${x.count !== 1 && PLURAL[x.count_unit] ? PLURAL[x.count_unit] : x.count_unit}`;
+}
+
 // "12" or "12 + 30 cu ft" or "30 cu ft" — how a stream's quantity reads on screens and notes.
 export function quantityText(s) {
   const parts = [];

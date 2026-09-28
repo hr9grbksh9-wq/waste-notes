@@ -6,11 +6,11 @@ import { SignaturePad, readPhoto, getLocation } from './sign.js';
 import {
   TRANSFEROR_TYPES, CONTAINERS, SECTIONS, NATION_LABEL, nationFromPostcode, regimeFor, premisesOf,
   streamsFromItems, itemById, loadLines, lineTotals, streamTotals, deskChecks, blocking, loadChecks,
-  vehicleCapacity, signedStreamKeys, honestyFlags, codeFor, descriptionFor, quantityText, hazardousFor, availableFor, streamKey,
+  vehicleCapacity, signedStreamKeys, honestyFlags, codeFor, descriptionFor, quantityText, hazardousFor, availableFor, streamKey, lineQuantity,
 } from './rules.js';
 import { buildJobNote, renderNotePdf } from './notes.js';
 
-const APP_VERSION = '0.1.1';
+const APP_VERSION = '0.1.2';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -29,7 +29,13 @@ async function boot() {
   state.mode = (await kvGet('mode')) || null;
   applyBrand();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    const hadController = !!navigator.serviceWorker.controller;
     navigator.serviceWorker.register('./sw.js').catch(() => {});
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController) return; // first install, nothing to refresh
+      if (/\/(load|close|sign|hazard)\b/.test(location.hash)) toast('A new version is ready. It loads next time you open the app.');
+      else location.reload();
+    });
   }
   persist();
   window.addEventListener('hashchange', route);
@@ -87,12 +93,14 @@ async function route() {
       if (sub === 'gate') return viewGate(job, parts[4]);
       if (sub === 'hazard') return viewHazard(job, query.get('item'));
       if (sub === 'finish') return viewFinish(job);
+      if (sub === 'note') return viewNote(job, decodeURIComponent(parts[4] || ''));
     }
     if (parts[0] === 'office') {
       if (parts[1] === 'new') return viewJobForm(null);
       if (parts[1] === 'edit') return viewJobForm(await jobGet(parts[2]));
       if (parts[1] === 'sent') return viewJobSent(await jobGet(parts[2]));
       if (parts[1] === 'register') return viewRegister(query.get('note'));
+      if (parts[1] === 'note') return viewRegisterNote(decodeURIComponent(parts[2] || ''));
       if (parts[1] === 'settings') return viewSettings();
       return viewOfficeJobs();
     }
@@ -280,7 +288,7 @@ async function viewCrewJob(job) {
   <div class="card step">
     <h2>3. Finish and send the note</h2>
     ${(job.notes || []).map((n) => `<div class="note-row"><strong>${esc(n.number)}</strong> <span class="muted">${fmtTime(n.issued_at)} · sealed ${esc(shortPrint(n.fingerprint))}</span>
-      <div class="btnrow"><button class="btn" data-share-client="${esc(n.number)}">Send to client</button><button class="btn" data-share-office="${esc(n.number)}">Send to office</button><button class="btn" data-view="${esc(n.number)}">View</button></div></div>`).join('')}
+      <div class="btnrow"><button class="btn" data-share-client="${esc(n.number)}">Send to client</button><button class="btn" data-share-office="${esc(n.number)}">Send to office</button><a class="btn" href="#/crew/job/${job.id}/note/${encodeURIComponent(n.number)}">View</a></div></div>`).join('')}
     ${unnoted.length && !openLoad
       ? `<a class="btn primary big" href="#/crew/job/${job.id}/finish">Finish: make the note (${unnoted.length} load${unnoted.length > 1 ? 's' : ''})</a>`
       : `<p class="muted">${openLoad ? 'Close the open load first.' : (job.notes || []).length ? 'All loads are on a note.' : 'Close at least one load first.'}</p>`}
@@ -304,7 +312,6 @@ async function viewCrewJob(job) {
   };
   $$('[data-share-client]').forEach((b) => (b.onclick = () => shareNote(job, b.dataset.shareClient, 'client')));
   $$('[data-share-office]').forEach((b) => (b.onclick = () => shareNote(job, b.dataset.shareOffice, 'office')));
-  $$('[data-view]').forEach((b) => (b.onclick = () => openPdf(job, b.dataset.view)));
 }
 
 // ---------------- Crew: sign-off ----------------
@@ -747,10 +754,117 @@ async function shareNote(job, number, who) {
   }
 }
 
-async function openPdf(job, number) {
-  const { pdf } = await noteFiles(job, number);
-  const url = URL.createObjectURL(pdf);
-  window.open(url, '_blank') || (location.href = url);
+// ---------------- Note screen (crew and office) ----------------
+// Phones cannot show a PDF inside the app, so the note is shown as a page;
+// the PDF is saved or shared from here.
+const fmtFull = (iso) => (iso ? new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
+
+function noteHtml(n) {
+  const household = n.kind === 'household_receipt';
+  const reg = n.transferee?.registration || {};
+  const regLine = [reg.authority, reg.tier, reg.number].filter(Boolean).join(' · ');
+  const kv = (rows) => rows.map(([k, v]) => `<div class="kv"><span>${esc(k)}</span><span>${esc(v)}</span></div>`).join('');
+  const addr = (a) => [a?.address, a?.postcode].filter(Boolean).join(', ');
+  const kg = (v, unknown) => (v == null ? 'n/k' : `${num(v)}${unknown ? '+' : ''}`);
+  const sigBox = (label, s, name, role, at, gps) => `<div class="sigbox"><div class="siglabel">${esc(label)}</div>
+    ${s?.data ? `<img src="${esc(s.data)}" alt="Signature of ${esc(name || '')}">` : '<div class="muted">No signature</div>'}
+    <div><strong>${esc([name, role].filter(Boolean).join(', '))}</strong></div>
+    <div class="muted small">${fmtFull(at)}${gps ? ` · ${gps.lat.toFixed(5)}, ${gps.lng.toFixed(5)}` : ''}</div></div>`;
+  const signatures = (s) => `<div class="sigs">${sigBox('Transferor (client)', s.client_signature, s.client_name, s.client_role, s.signed_at, s.gps)}${sigBox('Transferee (our crew lead)', s.crew_signature, s.crew_name, 'for the carrier', s.signed_at, null)}</div>
+    ${s.seal?.fingerprint ? `<p class="muted small">Signed description sealed on the phone at signing: ${esc(shortPrint(s.seal.fingerprint))}</p>` : ''}`;
+  const t = n.transferor || {};
+  const containers = [...new Set((n.transfer?.loads || []).flatMap((l) => Object.values(l.containers || {}).map((c) => c.label || c)))];
+  let h = `<header class="doc-h"><div><div class="doc-brand">${esc((n.transferee?.display_name || n.transferee?.trading_name || n.transferee?.legal_name || '').toUpperCase())}</div>
+    <div class="doc-title">${household ? 'Household waste collection receipt' : 'Waste transfer note'}</div></div>
+    <div class="doc-no"><strong>No. ${esc(n.number)}</strong><div>${esc(NATION_LABEL[n.nation] || '')}</div></div></header>`;
+  if (household) {
+    h += `<p>You do not need a waste transfer note for your own household waste. You do need to check it goes to a registered waste carrier. This receipt shows who took it, what was taken and where it is going.</p>
+    <h3 class="doc-sec">Collected by</h3>${kv([['Company', n.transferee.legal_name], ['Address', addr(n.transferee)], ['Registered carrier', regLine]])}
+    <h3 class="doc-sec">Collected from</h3>${kv([['Address', addr(n.transfer.place)], ['Collected', fmtFull(n.transfer.first_at)]])}`;
+  } else {
+    h += `<h3 class="doc-sec">1 The waste</h3>
+    <table class="streams"><thead><tr><th>Code</th><th>Description</th><th class="r">Quantity</th><th class="r">Est. kg</th><th class="r">cu ft</th></tr></thead><tbody>
+      ${(n.waste || []).map((s) => `<tr class="${s.pops ? 'pops' : ''}"><td>${esc(s.code)}</td><td>${esc(s.description)}${s.pops && s.pops_chemicals ? `<div class="small">POPs: ${esc(s.pops_chemicals)}</div>` : ''}</td><td class="r">${esc(quantityText(s))}</td><td class="r">${kg(s.kg_est, s.kgUnknown)}</td><td class="r">${esc(s.cu_ft)}</td></tr>`).join('')}
+    </tbody></table>
+    ${kv([['How it is contained', containers.length ? containers.join(', ') : 'Loose'], ['Quantity basis', n.quantities_basis]])}
+    ${(n.waste || []).some((s) => s.pops) ? '<p class="pops-box small"><strong>Upholstered seating containing POPs</strong> is kept unmixed with other waste during carriage, unloaded separately, and goes only to an incinerator authorised to take POPs waste.</p>' : ''}
+    <h3 class="doc-sec">2 Handed over by (transferor)</h3>
+    ${kv([['Name', t.name], ['Address', [t.address, t.postcode].filter(Boolean).join(', ')],
+      ['SIC code (2007)', t.sic || (n.job?.premises === 'domestic' ? 'Not applicable (domestic property)' : 'Not given')],
+      ['They are', t.is_producer ? 'The producer of the waste' : 'The current holder of the waste (not the producer)'],
+      ...(t.fm_name ? [['Work placed by', t.fm_name]] : []), ...(t.company_number ? [['Company number', t.company_number]] : [])])}
+    <h3 class="doc-sec">3 Collected by (transferee)</h3>
+    ${kv([['Name', [n.transferee.legal_name, n.transferee.trading_name && `trading as ${n.transferee.trading_name}`].filter(Boolean).join(', ')], ['Address', addr(n.transferee)],
+      ['They are', `A registered waste carrier${/broker/i.test((reg.roles || []).join(' ')) ? ', broker and dealer' : ''}`], ['Registration', regLine]])}
+    <h3 class="doc-sec">4 The transfer</h3>
+    ${kv([['Place of transfer', addr(n.transfer.place)], ['Date and time', `${fmtFull(n.transfer.first_at)}${n.transfer.loads.length > 1 ? ` (first of ${n.transfer.loads.length} loads, see schedule)` : ''}`], ['Broker or dealer', 'None: collected and carried by the transferee']])}
+    ${n.transfer.loads.length > 1 ? `<p class="muted small">${n.regime === 'SC' ? 'This note covers several loads of the waste described above between the same parties. Each load is listed in the schedule with its own details and signatures.' : 'This note covers a series of loads of the waste described above between the same parties. The transfer is treated as taking place at the first load (Environmental Protection Act 1990, s34(4A)(b)). Each load is listed in the schedule.'}</p>` : ''}
+    <h3 class="doc-sec">5 Declarations</h3>
+    ${n.regime === 'EW' ? `<p>${n.declarations?.hierarchy ? '☑' : '☐'} The transferor confirms they have fulfilled their duty to apply the waste hierarchy as required by regulation 12 of the Waste (England and Wales) Regulations 2011.</p>` : ''}
+    <p>${n.declarations?.description_accurate ? '☑' : '☐'} The transferor confirms this description of the waste is accurate, and that each load is recorded against this note.</p>`;
+  }
+  if (n.signoff) {
+    h += `<h3 class="doc-sec">${household ? 'Signatures' : '6 Signatures'}</h3>${signatures(n.signoff)}`;
+    for (const a of n.addenda || []) h += `<p class="small"><strong>Addition signed ${fmtFull(a.signed_at)} for:</strong> ${esc(a.streams.map((s) => `${s.code} ${s.description}`).join('; '))}</p>${signatures(a)}`;
+  }
+  h += `<h3 class="doc-sec">${household ? 'What was taken' : '7 Load schedule'}</h3>`;
+  for (const l of n.transfer.loads || []) {
+    h += `<div class="doc-load"><p><strong>Load ${esc(l.ref)} · Vehicle ${esc(l.vehicle_reg || '?')}${l.vehicle_label ? ` (${esc(l.vehicle_label)})` : ''} · Left site ${fmtFull(l.closed_at)}</strong><br>
+      Going to: ${esc([l.destination?.name, l.destination?.postcode].filter(Boolean).join(', ') || 'not recorded')}${l.destination?.permit_number ? ` · permit ${esc(l.destination.permit_number)}` : ''}</p>
+      <table class="streams"><thead><tr><th>Item</th><th>Code</th><th class="r">Quantity</th><th class="r">Est. kg</th><th class="r">cu ft</th></tr></thead><tbody>
+      ${l.lines.map((x) => `<tr class="${x.pops ? 'pops' : ''}"><td>${esc(x.label)}</td><td>${esc(x.code)}</td><td class="r">${esc(lineQuantity(x))}</td><td class="r">${kg(x.kg_est)}</td><td class="r">${x.cu_ft == null ? '' : esc(x.cu_ft)}</td></tr>`).join('')}
+      </tbody></table>
+      ${Object.keys(l.containers || {}).length ? `<p class="muted small">Contained: ${esc([...new Set(Object.values(l.containers).map((c) => c.label || c))].join(', '))}</p>` : ''}
+      ${l.client_signature?.data ? `<div class="sigs">${sigBox('Client signed for this load', l.client_signature, l.client_signature.name, '', l.client_signature.at, null)}</div>` : ''}</div>`;
+  }
+  const { reuse, hazards_left: hz } = n.annex || {};
+  if (reuse?.length || hz?.length) {
+    h += `<h3 class="doc-sec">${household ? 'Not taken as waste' : '8 Not on this note'}</h3>`;
+    if (reuse?.length) h += `<p><strong>Leaving for reuse or donation (not waste):</strong> ${esc(reuse.map((r) => `${r.count} × ${r.label} (load ${r.load})`).join('; '))}</p>`;
+    if (hz?.length) h += `<p><strong>Hazardous items left on site for specialist collection (not carried):</strong> ${esc(hz.map((x) => `${x.count || 1} × ${x.type}${x.where ? ` at ${x.where}` : ''}${x.tagged ? ' (tagged)' : ''}`).join('; '))}</p>`;
+  }
+  h += `<footer class="doc-f"><p>${household ? 'Receipt for household waste collected by a registered carrier.' : n.regime === 'SC'
+    ? 'Electronic transfer note: Environmental Protection (Duty of Care) (Scotland) Regulations 2014. Keep for at least 2 years.'
+    : 'Electronic transfer note under regulation 35(4) and (5) of the Waste (England and Wales) Regulations 2011. Keep for at least 2 years.'}</p>
+    <p>Sealed record fingerprint (SHA-256): <span class="fp">${esc(n.seal?.fingerprint || '')}</span></p>
+    <p id="sealCheck" class="muted">Checking the seal…</p></footer>`;
+  return `<article class="note-doc">${h}</article>`;
+}
+
+async function showNote(note, actions, back) {
+  view().innerHTML = `
+  <div class="card no-print">
+    <div class="row"><a class="btn small" href="${back}">← Back</a><span class="pill">${esc(note.number)}</span></div>
+    <div class="btnrow">${actions.map((a) => `<button class="btn ${a.primary ? 'primary' : ''}" data-act="${a.id}">${esc(a.label)}</button>`).join('')}</div>
+  </div>
+  ${noteHtml(note)}`;
+  actions.forEach((a) => ($(`[data-act="${a.id}"]`).onclick = a.run));
+  const v = await verifySeal(note);
+  const el = $('#sealCheck');
+  if (el) { el.className = v.ok ? 'ok-text' : 'check-item block'; el.textContent = v.ok ? 'Seal checks out: nothing in this note has changed since it was made.' : 'Seal broken: this record has been changed since it was made.'; }
+}
+
+async function viewNote(job, number) {
+  const n = (job.notes || []).find((x) => x.number === number);
+  if (!n) { toast('That note is not on this phone.', 'bad'); return go(`#/crew/job/${job.id}`); }
+  const save = async () => { const { pdf } = await noteFiles(job, number); downloadBlob(pdf.name, pdf); toast('PDF saved to Downloads.', 'ok'); };
+  await showNote(n.record, [
+    { id: 'client', label: 'Send to client', primary: true, run: () => shareNote(job, number, 'client') },
+    { id: 'office', label: 'Send to office', run: () => shareNote(job, number, 'office') },
+    { id: 'save', label: 'Save PDF', run: save },
+    { id: 'print', label: 'Print', run: () => window.print() },
+  ], `#/crew/job/${job.id}`);
+}
+
+async function viewRegisterNote(key) {
+  const e = (await regAll()).find((x) => x.key === key);
+  if (!e || e.kind !== 'note') { toast('That note is not in the register on this device.', 'bad'); return go('#/office/register'); }
+  const pdf = () => new File([renderNotePdf(e.record, state.settings)], `${e.record.number}.pdf`, { type: 'application/pdf' });
+  await showNote(e.record, [
+    { id: 'save', label: 'Save PDF', primary: true, run: () => { const f = pdf(); downloadBlob(f.name, f); } },
+    { id: 'share', label: 'Share PDF', run: () => shareFiles([pdf()], `Waste transfer note ${e.record.number}`, `Waste transfer note ${e.record.number}.`) },
+    { id: 'print', label: 'Print', run: () => window.print() },
+  ], `#/office/register?note=${encodeURIComponent(key)}`);
 }
 
 // ---------------- Office: job form ----------------
@@ -996,7 +1110,7 @@ async function viewRegister(openKey) {
         <table class="streams"><thead><tr><th>Load</th><th>Vehicle</th><th>Destination</th><th class="r">Est. kg</th><th class="r">Tip kg</th><th>Ticket</th></tr></thead><tbody>
         ${r.transfer.loads.map((l) => { const t = tipByLoad.get(l.ref); return `<tr><td>${esc(l.ref)}</td><td>${esc(l.vehicle_reg)}</td><td>${esc(l.destination?.name || '')}</td><td class="r">${num(l.totals?.kg)}</td><td class="r">${t?.weight_kg != null ? num(t.weight_kg) : '–'}</td><td>${esc(t?.ticket_no || '')}</td></tr>`; }).join('')}
         </tbody></table>
-        <div class="btnrow"><button class="btn" id="pdf">Make the PDF again</button><button class="btn danger" id="rm">Remove from register</button></div></div>`;
+        <div class="btnrow"><a class="btn primary" href="#/office/note/${encodeURIComponent(e.key)}">View note</a><button class="btn" id="pdf">Make the PDF again</button><button class="btn danger" id="rm">Remove from register</button></div></div>`;
       $('#pdf').onclick = () => downloadBlob(`${r.number}.pdf`, new Blob([renderNotePdf(r, state.settings)], { type: 'application/pdf' }));
       $('#rm').onclick = async () => { if (confirm('Remove this record from the register on this device?')) { await regDel(e.key); go('#/office/register'); } };
       $('#detail').scrollIntoView({ behavior: 'smooth' });
