@@ -9,9 +9,9 @@ import {
   vehicleCapacity, signedStreamKeys, honestyFlags, codeFor, descriptionFor, quantityText, hazardousFor, availableFor, streamKey, lineQuantity,
 } from './rules.js';
 import { buildJobNote, renderNotePdf } from './notes.js';
-import { zohoImportFiles } from './zoho.js';
+import { zohoImportFiles, zohoPayload } from './zoho.js';
 
-const APP_VERSION = '0.1.5';
+const APP_VERSION = '0.1.6';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -753,17 +753,21 @@ async function noteFiles(job, number) {
   const n = (fresh.notes || []).find((x) => x.number === number);
   if (!n) throw new Error('Note not found');
   const pdf = n.pdf instanceof Blob ? n.pdf : new Blob([renderNotePdf(n.record, state.settings)], { type: 'application/pdf' });
-  return { n, pdf: new File([pdf], `${number}.pdf`, { type: 'application/pdf' }), json: new File([JSON.stringify(n.record)], `${number}.json`, { type: 'application/json' }) };
+  return {
+    n, pdf: new File([pdf], `${number}.pdf`, { type: 'application/pdf' }), json: new File([JSON.stringify(n.record)], `${number}.json`, { type: 'application/json' }),
+    // for automatic filing in Zoho: the same note, already in Zoho's field names
+    zoho: new File([JSON.stringify(zohoPayload(n.record))], `${number}.zoho.json`, { type: 'application/json' }),
+  };
 }
 
 async function shareNote(job, number, who) {
-  const { pdf, json } = await noteFiles(job, number);
+  const { pdf, json, zoho } = await noteFiles(job, number);
   let result;
   if (who === 'client') {
     const to = [...new Set([...(job.notes_to || []), job.signatory?.email].filter(Boolean))].join(', ');
     result = await shareFiles([pdf], `Waste transfer note ${number}`, `Waste transfer note ${number} for job ${job.ref}.`, to);
   } else {
-    result = await shareFiles([pdf, json], `Waste transfer note ${number} (office copy)`, `Office copy of ${number}: PDF and sealed record.`, state.settings.company.waste_email);
+    result = await shareFiles([pdf, json, zoho], `Waste transfer note ${number} (office copy)`, `Office copy of ${number}: PDF and sealed record.`, state.settings.company.waste_email);
   }
   if (result === 'cancelled') return result;
   const fresh = await jobGet(job.id);
@@ -1110,6 +1114,8 @@ async function viewRegister(openKey) {
         const v = await verifySeal(rec);
         if (rec.schema === 'waste-notes/1') {
           await regPut({ key: `note:${rec.number}:${rec.seal?.fingerprint}`, kind: 'note', date: rec.transfer?.first_at, record: rec, seal_ok: v.ok, imported_at: nowIso() });
+        } else if (rec.kind === 'waste-notes-zoho') {
+          continue; // the Zoho copy of a note: filed by Zoho, nothing to add here
         } else if (rec.kind === 'tip_record') {
           await regPut({ key: `tip:${rec.load_ref}:${rec.seal?.fingerprint}`, kind: 'tip', date: rec.recorded_at, record: rec, seal_ok: v.ok, imported_at: nowIso() });
         } else throw new Error('Unknown record');

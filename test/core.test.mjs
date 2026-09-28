@@ -119,6 +119,14 @@ ok(sc.regime === 'SC' && sc.declarations.hierarchy === null, 'Scotland drops hie
   ok(add['Additions'] === 1 && add['Additions Detail'] === '2026-09-29 10:00:00 Pat Client: 20 01 40 Metals' && add['Seal Check'] === 'Broken', 'zoho note row: signed additions and a broken seal');
   const scl = lineRows({ record: { ...note, transfer: { ...note.transfer, loads: [{ ...note.transfer.loads[0], client_signature: { name: 'Pat Client', at: '2026-09-29T09:35:00Z' } }] } } })[0];
   ok(scl['Load Signed By'] === 'Pat Client' && scl['Load Signed At'] === '2026-09-29 10:35:00', 'zoho line row: per-load client signature (Scotland)');
+
+  // the Zoho copy that travels with the office copy, for automatic filing
+  const { zohoPayload } = await import('../js/zoho.js');
+  const zp = zohoPayload(note);
+  ok(zp.kind === 'waste-notes-zoho' && zp.number === note.number && zp.fingerprint === note.seal.fingerprint, 'zoho copy: kind, number and fingerprint');
+  ok(zp.note.Name === note.number && zp.note.First_Load_At === '2026-09-29T09:40:00+00:00' && zp.note.Reuse_Items === 4, 'zoho copy: API names, ISO times, values');
+  ok(!('Seal_Check' in zp.note) && !('Office_Copy_Received' in zp.note) && !('Tip_Weight_Kg' in zp.note) && !('Additions_Detail' in zp.note), 'zoho copy: leaves Zoho-set and empty fields out');
+  ok(zp.lines.length === nLines && zp.lines[0].Name === `${note.number} ${note.transfer.loads[0].ref} 1` && !('Waste_Transfer_Note' in zp.lines[0]), 'zoho copy: one line per item, linked by Zoho on filing');
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nall passed');
