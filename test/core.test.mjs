@@ -91,5 +91,16 @@ const sc = await buildJobNote({ ...job, nation: 'scotland' }, settings);
 writeFileSync(new URL('./out/sample-scotland.pdf', import.meta.url), renderNotePdf(sc, settings));
 ok(sc.regime === 'SC' && sc.declarations.hierarchy === null, 'Scotland drops hierarchy declaration');
 
+// hazardous by premises: a PC from a house is hazardous (20 01 35*), from an office it is not
+{
+  const { hazardousFor } = await import('../js/rules.js');
+  const pc = { ...settings.items.find((i) => i.id === 'D04'), code_household: '20 01 35* + 20 01 36' };
+  ok(!hazardousFor(pc, 'commercial') && hazardousFor(pc, 'domestic'), 'household PC is hazardous, office PC is not');
+  const s2 = { ...settings, items: settings.items.map((i) => (i.id === 'D04' ? pc : i)) };
+  const hjob = { ...job, transferor_type: 'landlord_agent_executor', premises: 'domestic' };
+  const hl = loadLines({ counts: { D04: 2 } }, itemById(s2), 'domestic');
+  ok(loadChecks(hjob, { ...job.loads[0], counts: { D04: 2 } }, s2, hl).some((c) => c.rule === 'hazardous'), 'hazardous line blocks the load');
+}
+
 console.log(failures ? `\n${failures} FAILED` : '\nall passed');
 process.exit(failures ? 1 : 0);

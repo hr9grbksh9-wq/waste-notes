@@ -6,6 +6,8 @@ import { TRANSFEROR_TYPES, NATION_LABEL, premisesOf, itemById, loadLines, lineTo
 const fmtTime = (iso) => (iso ? new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
 const fmtKg = (v, unknown) => (v == null ? 'n/k' : `${v.toLocaleString('en-GB')}${unknown ? '+' : ''}`);
 const addr = (a) => [a?.address, a?.postcode].filter(Boolean).join(', ');
+const PLURAL = { position: 'positions', column: 'columns', bag: 'bags', sack: 'sacks', bin: 'bins' };
+const qty = (x) => (!x.count_unit || x.count_unit === 'each' ? String(x.count) : `${x.count} ${x.count !== 1 && PLURAL[x.count_unit] ? PLURAL[x.count_unit] : x.count_unit}`);
 
 export function noteNumber(job) {
   const seq = (job.notes || []).length + 1;
@@ -191,10 +193,10 @@ export function renderNotePdf(note, settings) {
     flow.para(`Going to: ${dest || 'not recorded'}${l.destination?.permit_number ? ` · permit ${l.destination.permit_number}` : ''}`, { size: 8.5, gap: 5 });
     flow.table(
       [{ title: 'Item', width: 0.44 }, { title: 'Code', width: 0.14 }, { title: 'Quantity', width: 0.12, align: 'right' }, { title: 'Est. kg', width: 0.14, align: 'right' }, { title: 'cu ft', width: 0.16, align: 'right' }],
-      l.lines.map((x) => [x.label, x.code, x.count_unit && x.count_unit !== 'each' ? `${x.count} ${x.count_unit}` : String(x.count), fmtKg(x.kg_est), x.cu_ft == null ? '' : String(x.cu_ft)]),
+      l.lines.map((x) => [x.label, x.code, qty(x), fmtKg(x.kg_est), x.cu_ft == null ? '' : String(x.cu_ft)]),
       { size: 8 },
     );
-    const c = Object.values(l.containers || {}).map((v) => v.label || v).join(', ');
+    const c = [...new Set(Object.values(l.containers || {}).map((v) => v.label || v))].join(', ');
     if (c) flow.para(`Contained: ${c}`, { size: 8, gap: 2 });
     if (l.client_signature) {
       flow.ensure(50);

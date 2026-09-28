@@ -6,11 +6,11 @@ import { SignaturePad, readPhoto, getLocation } from './sign.js';
 import {
   TRANSFEROR_TYPES, CONTAINERS, SECTIONS, NATION_LABEL, nationFromPostcode, regimeFor, premisesOf,
   streamsFromItems, itemById, loadLines, lineTotals, streamTotals, deskChecks, blocking, loadChecks,
-  vehicleCapacity, signedStreamKeys, honestyFlags, codeFor, descriptionFor, quantityText,
+  vehicleCapacity, signedStreamKeys, honestyFlags, codeFor, descriptionFor, quantityText, hazardousFor, availableFor, streamKey,
 } from './rules.js';
 import { buildJobNote, renderNotePdf } from './notes.js';
 
-const APP_VERSION = '0.1.0';
+const APP_VERSION = '0.1.1';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -322,7 +322,7 @@ async function viewSignoff(job, addendum) {
     const open = (job.loads || []).find((l) => !l.closed_at) || (job.loads || [])[job.loads.length - 1];
     const lines = open ? loadLines(open, itemById(state.settings), premisesOf(job)) : [];
     const all = streamsFromItems(state.settings.items, premisesOf(job));
-    const keys = new Set(lines.map((l) => `${l.code}|${l.description}`).filter((k) => !signed.has(k)));
+    const keys = new Set(lines.map((l) => l.stream_key).filter((k) => k && !signed.has(k)));
     streams = all.filter((s) => keys.has(s.key));
     if (!streams.length) { toast('Nothing new needs signing.'); return go(`#/crew/job/${job.id}`); }
   } else {
@@ -393,9 +393,9 @@ async function viewTally(job, ref) {
   const load = (job.loads || []).find((l) => l.ref === ref);
   if (!load) return go(`#/crew/job/${job.id}`);
   if (load.closed_at) return go(`#/crew/job/${job.id}/gate/${encodeURIComponent(ref)}`);
-  const items = (state.settings.items || []).filter((i) => i.status !== 'retired');
-  const byId = itemById(state.settings);
   const premises = premisesOf(job);
+  const items = (state.settings.items || []).filter((i) => availableFor(i, premises));
+  const byId = itemById(state.settings);
   let mode = 'waste';
   let showAll = false;
   let filter = '';
@@ -414,7 +414,7 @@ async function viewTally(job, ref) {
   };
 
   const tile = (it) => {
-    const stop = it.section === 'hazardous_stop';
+    const stop = hazardousFor(it, premises);
     const count = mode === 'reuse' ? (load.reuse?.[it.id] || 0) : (load.counts?.[it.id] || 0);
     if (stop) return `<button class="tile stop" data-hazard="${esc(it.id)}"><span class="lbl">${esc(it.label)}</span><span class="small">Do not load: tap to log</span></button>`;
     return `<div class="tile ${it.pops ? 'pops' : ''} ${it.weee ? 'weee' : ''} ${count ? 'has' : ''}" data-id="${esc(it.id)}">
@@ -426,8 +426,9 @@ async function viewTally(job, ref) {
   const render = () => {
     const f = filter.toLowerCase();
     const visible = items.filter((it) => (f ? `${it.label} ${it.long_name || ''}`.toLowerCase().includes(f) : (showAll || it.common || (load.counts?.[it.id] || load.reuse?.[it.id]))));
+    const sectionOf = (it) => (hazardousFor(it, premises) ? 'hazardous_stop' : it.section);
     const sectionsHtml = SECTIONS.map((sec) => {
-      const list = visible.filter((it) => it.section === sec.id);
+      const list = visible.filter((it) => sectionOf(it) === sec.id);
       if (!list.length) return '';
       return `<section class="sec ${sec.tone}"><h3>${esc(sec.label)}</h3><div class="tiles">${list.map(tile).join('')}</div></section>`;
     }).join('');
@@ -590,7 +591,7 @@ async function viewGate(job, ref) {
   const site = (state.settings.sites || []).find((s) => s.id === load.destination_id);
   const pops = streams.filter((s) => s.pops);
   const contFor = (st) => {
-    const secs = [...new Set(lines.filter((l) => l.code === st.code && l.description === st.description).map((l) => l.section))];
+    const secs = [...new Set(lines.filter((l) => (l.stream_key || `${l.code}|${l.description}`) === st.key).map((l) => l.section))];
     return [...new Set(secs.map((s) => load.containers?.[s]?.code || 'LOO'))].join('/');
   };
   view().innerHTML = `
@@ -837,9 +838,9 @@ async function viewJobForm(existing) {
   const renderStreams = () => {
     const premises = TRANSFEROR_TYPES[new FormData(f).get('transferor_type')]?.premises || 'commercial';
     const streams = streamsFromItems(s.items, premises);
-    const surveyKeys = new Set(Object.entries(job.survey_counts || {}).filter(([, v]) => v > 0).map(([id]) => { const it = itemById(s).get(id); return it ? `${codeFor(it, premises)}|${descriptionFor(it, premises)}` : null; }));
+    const surveyKeys = new Set(Object.entries(job.survey_counts || {}).filter(([, v]) => v > 0).map(([id]) => { const it = itemById(s).get(id); return it ? streamKey(it, premises) : null; }));
     $('#streams').innerHTML = streams.map((st) => `<label class="check ${st.pops ? 'pops' : ''}"><input type="checkbox" name="stream" value="${esc(st.key)}" ${job.expected_streams.includes(st.key) || surveyKeys.has(st.key) ? 'checked' : ''}> <strong>${esc(st.code)}</strong> ${esc(st.description)} <span class="muted small">e.g. ${esc(st.examples.join(', '))}</span></label>`).join('');
-    $('#survey').innerHTML = s.items.filter((it) => !it.hazardous).map((it) => `<label class="inline">${esc(it.label)}<input type="number" min="0" inputmode="numeric" data-survey="${esc(it.id)}" value="${job.survey_counts?.[it.id] || ''}"></label>`).join('');
+    $('#survey').innerHTML = s.items.filter((it) => availableFor(it, premises) && !hazardousFor(it, premises)).map((it) => `<label class="inline">${esc(it.label)}<input type="number" min="0" inputmode="numeric" data-survey="${esc(it.id)}" value="${job.survey_counts?.[it.id] || ''}"></label>`).join('');
   };
   const refresh = () => {
     read();

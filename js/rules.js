@@ -65,19 +65,54 @@ export function descriptionFor(item, premises) {
   return d || item.long_name || item.label;
 }
 
+// Standard descriptions for the waste streams a client signs for (List of Wastes wording,
+// in plain terms). Item detail stays on each load line.
+const STREAM_DESC = {
+  '15 01 01': 'Paper and cardboard packaging', '15 01 02': 'Plastic packaging', '15 01 03': 'Wooden packaging (pallets)',
+  '16 02 14': 'Discarded electrical equipment (non-hazardous)', '16 06 04': 'Alkaline batteries',
+  '16 06 05': 'Other batteries (non-hazardous)', '17 06 04': 'Insulation materials (ceiling tiles)',
+  '17 09 04': 'Mixed construction and demolition waste', '20 01 01': 'Paper and cardboard', '20 01 10': 'Clothes',
+  '20 01 11': 'Textiles', '20 01 34': 'Batteries (non-hazardous)', '20 01 36': 'Discarded electrical equipment (non-hazardous)',
+  '20 01 38': 'Wood', '20 01 39': 'Plastics', '20 01 40': 'Metals', '20 03 01': 'Mixed municipal waste',
+  '20 03 07': 'Bulky waste (furniture and fittings)',
+};
+const POPS_DESC = 'domestic seating waste containing POPs';
+
+export const isPopsSeating = (item) => item.section === 'seating_pops' || /containing POPs/i.test(item.note_description_business || '');
+
+// Not every item exists for every kind of premises (e.g. partitions from a house).
+export function availableFor(item, premises) {
+  const c = String(codeFor(item, premises) || '').trim().toLowerCase();
+  return !!c && c !== 'n/a' && item.status !== 'retired';
+}
+
+// Hazardous for this job: flagged hazardous, or its code for these premises is a
+// hazardous (*) code. Some electricals are only hazardous from households.
+export function hazardousFor(item, premises) {
+  return !!item.hazardous || item.section === 'hazardous_stop' || String(codeFor(item, premises) || '').includes('*');
+}
+
 export function streamKey(item, premises) {
-  return `${codeFor(item, premises)}|${descriptionFor(item, premises)}`;
+  return `${codeFor(item, premises)}${isPopsSeating(item) ? '|POPs' : ''}`;
+}
+
+export function streamDescription(item, premises) {
+  if (isPopsSeating(item)) return POPS_DESC;
+  const code = codeFor(item, premises);
+  if (STREAM_DESC[code]) return STREAM_DESC[code];
+  if (/\+/.test(code)) return `${descriptionFor(item, premises)} (mixed codes)`;
+  return descriptionFor(item, premises);
 }
 
 // Streams a job could carry (everything that can go on a transfer note).
 export function streamsFromItems(items, premises) {
   const map = new Map();
   for (const it of items) {
-    if (it.hazardous || it.status === 'retired') continue;
+    if (!availableFor(it, premises) || hazardousFor(it, premises)) continue;
     const key = streamKey(it, premises);
     if (!map.has(key)) {
-      map.set(key, { key, code: codeFor(it, premises), description: descriptionFor(it, premises), pops: !!it.pops,
-        pops_chemicals: it.pops_chemicals || null, examples: [] });
+      map.set(key, { key, code: codeFor(it, premises), description: streamDescription(it, premises), pops: isPopsSeating(it),
+        pops_chemicals: isPopsSeating(it) ? (it.pops_chemicals || 'DecaBDE, HBCDD, PentaBDE, TetraBDE') : null, examples: [] });
     }
     const s = map.get(key);
     if (s.examples.length < 4) s.examples.push(it.label);
@@ -113,16 +148,19 @@ export function loadLines(load, items, premises) {
     out.push({
       item_id: id, label: it.label, long_name: it.long_name || it.label, section: it.section,
       code: codeFor(it, premises), description: descriptionFor(it, premises),
-      pops: !!it.pops, pops_chemicals: it.pops_chemicals || null,
+      stream_key: streamKey(it, premises), stream_description: streamDescription(it, premises),
+      pops: isPopsSeating(it), pops_chemicals: isPopsSeating(it) ? (it.pops_chemicals || 'DecaBDE, HBCDD, PentaBDE, TetraBDE') : null,
       count, count_unit: it.count_unit || 'each',
       std_kg: it.std_kg ?? null, kg_est: it.std_kg == null ? null : Math.round(count * it.std_kg),
       cu_ft: it.cu_ft == null ? null : Math.round(count * it.cu_ft * 10) / 10,
       destination_type: it.destination_type || null,
+      hazardous: hazardousFor(it, premises),
     });
   }
   for (const u of load.unlisted || []) {
     out.push({ item_id: 'UNLISTED', label: `Not on list: ${u.text}`, long_name: u.text, section: 'general',
       code: 'TO CONFIRM', description: `Unlisted item: ${u.text} (code to be confirmed by the office)`, pops: false,
+      stream_key: `UNLISTED|${u.text}`, stream_description: `Unlisted item: ${u.text} (code to be confirmed by the office)`,
       count: u.count || 1, count_unit: 'each', std_kg: null, kg_est: null, cu_ft: u.cu_ft ?? null, review: true });
   }
   return out.sort((a, b) => a.code.localeCompare(b.code) || a.label.localeCompare(b.label));
@@ -131,8 +169,8 @@ export function loadLines(load, items, premises) {
 export function streamTotals(lines) {
   const map = new Map();
   for (const l of lines) {
-    const key = `${l.code}|${l.description}`;
-    if (!map.has(key)) map.set(key, { code: l.code, description: l.description, pops: l.pops, pops_chemicals: l.pops_chemicals, count: 0, measured: [], kg_est: null, kgUnknown: false, cu_ft: 0 });
+    const key = l.stream_key || `${l.code}|${l.description}`;
+    if (!map.has(key)) map.set(key, { key, code: l.code, description: l.stream_description || l.description, pops: l.pops, pops_chemicals: l.pops_chemicals, count: 0, measured: [], kg_est: null, kgUnknown: false, cu_ft: 0 });
     const s = map.get(key);
     if (COUNTABLE.has(l.count_unit)) s.count += l.count;
     else s.measured.push(`${l.count} ${l.count_unit}`);
@@ -198,10 +236,12 @@ export const blocking = (checks) => checks.filter((c) => c.level === 'block');
 export function loadChecks(job, load, settings, lines) {
   const out = [];
   const signedKeys = new Set(signedStreamKeys(job));
-  const missing = [...new Set(lines.filter((l) => l.item_id !== 'UNLISTED' && !signedKeys.has(`${l.code}|${l.description}`)).map((l) => `${l.code} ${l.description}`))];
+  const missing = [...new Set(lines.filter((l) => l.item_id !== 'UNLISTED' && !signedKeys.has(l.stream_key)).map((l) => `${l.code} ${l.stream_description}`))];
   if (!job.signoff) out.push({ level: 'block', rule: 'signoff', msg: 'The client has not signed the waste description yet.' });
   else if (missing.length) out.push({ level: 'block', rule: 'addendum', msg: `Not on the signed description: ${missing.join('; ')}. Get the client to sign an addition.`, missing });
   if (!lines.length) out.push({ level: 'block', rule: 'empty', msg: 'Nothing has been counted on this load.' });
+  const haz = lines.filter((l) => l.hazardous).map((l) => l.label);
+  if (haz.length) out.push({ level: 'block', rule: 'hazardous', msg: `Hazardous on this job, so it cannot go on this load: ${haz.join(', ')}. Take it off and log it as found hazardous.` });
   if (!load.vehicle_reg) out.push({ level: 'block', rule: 'vehicle', msg: 'Add the vehicle registration.' });
   if (!load.destination_id) out.push({ level: 'block', rule: 'destination', msg: 'Choose where this load is going.' });
   const site = (settings.sites || []).find((s) => s.id === load.destination_id);
