@@ -1,5 +1,5 @@
 // Offline cache for the app shell. Bump VERSION on every release.
-const VERSION = 'wn-0.1.4';
+const VERSION = 'wn-0.1.5';
 const SHELL = [
   './', './index.html', './styles.css', './manifest.webmanifest', './settings.example.json',
   './js/app.js', './js/db.js', './js/pack.js', './js/pdf.js', './js/notes.js', './js/rules.js', './js/seal.js', './js/sign.js', './js/zoho.js',

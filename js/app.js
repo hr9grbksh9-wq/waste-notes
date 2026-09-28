@@ -11,7 +11,7 @@ import {
 import { buildJobNote, renderNotePdf } from './notes.js';
 import { zohoImportFiles } from './zoho.js';
 
-const APP_VERSION = '0.1.4';
+const APP_VERSION = '0.1.5';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1227,6 +1227,7 @@ function viewHelp() {
       <li>The crew lead counts items onto each van load from a fixed list. Upholstered seating, electricals and hazardous items each have their own section. Hazardous items are never loaded: they are logged and left.</li>
       <li>At the tip, the gate slip shows the details the site must record. The ticket number and weight are kept for our records.</li>
       <li>At the end, the phone makes the waste transfer note as a PDF and seals it. The client gets the PDF, and the office gets the PDF plus the sealed record for the register.</li>
+      <li>In the office, the register checks every seal. "Download for Zoho" makes two files for Zoho CRM's own Import: the notes first, then their lines.</li>
     </ol>
     <p>Everything works with no signal. Nothing is sent anywhere unless someone presses Send.</p>
     <p class="muted small">Quantities on notes are item counts; weights are estimates from the item list. Sealing uses SHA-256: if anything in a record changes after it is made, the register shows the seal as broken.</p>
